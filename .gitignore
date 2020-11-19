@@ -15,4 +15,7 @@
 # vendor/
 
 # Website version history
-versions/
+history/
+
+# configuration file
+config.yaml

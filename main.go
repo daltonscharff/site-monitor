@@ -1,13 +1,25 @@
 package main
 
+/*
+Checks to see if a website has changed since last run.
+Should be used as a cronjob.
+
+Usage: site-monitor.exe --url http://www.google.com
+*/
+
 import (
+	"flag"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
 	"net/http"
+	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/spf13/viper"
 )
 
 func getHttpResponse(url string) []byte {
@@ -54,7 +66,7 @@ func previousVersion(urlHash string, dir string) int {
 }
 
 func writeFile(fileName string, lines []byte) {
-	err := ioutil.WriteFile(fileName, lines, 0777)
+	err := ioutil.WriteFile(fileName, lines, 0644)
 	if err != nil {
 		panic(err)
 	}
@@ -69,19 +81,47 @@ func compareStringToFile(text string, fileName string) int {
 	return strings.Compare(text, string(content))
 }
 
+func sendTextAlert(siteUrl string, twilioAccountId string, twilioAuthToken string, fromNumber string, toNumber string) *http.Response {
+	twilioUrl := fmt.Sprintf("https://%s:%s@api.twilio.com/2010-04-01/Accounts/%s/Messages.json", twilioAccountId, twilioAuthToken, twilioAccountId)
+
+	resp, err := http.PostForm(twilioUrl, url.Values{
+		"From": {fromNumber},
+		"To":   {toNumber},
+		"Body": {"WEBSITE UPDATE%0a" + siteUrl},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return resp
+}
+
 func main() {
-	// url := "https://time.gov/"
-	url := "https://www.google.com"
-	versionDir := "./versions"
+	urlPtr := flag.String("url", "", "FQDN to watch for changes")
+	dirPtr := flag.String("dir", "./history", "folder to store site versions")
+	flag.Parse()
+
+	url := *urlPtr
+	dir := *dirPtr
+
+	err := os.MkdirAll(dir, 0644)
+	if err != nil {
+		panic(err)
+	}
+
+	viper.SetConfigFile("./config.yaml")
+	if err := viper.ReadInConfig(); err != nil {
+		panic(err)
+	}
 
 	urlHash := strconv.FormatInt(int64(hash(url)), 10)
 
 	resp := getHttpResponse(url)
 
-	prevVersionNum := previousVersion(urlHash, versionDir)
+	prevVersionNum := previousVersion(urlHash, dir)
 
-	oldFileName := fmt.Sprintf("%s/%s.v%d.html", versionDir, urlHash, prevVersionNum)
-	fileName := fmt.Sprintf("%s/%s.v%d.html", versionDir, urlHash, prevVersionNum+1)
+	oldFileName := fmt.Sprintf("%s/%s.v%d.html", dir, urlHash, prevVersionNum)
+	fileName := fmt.Sprintf("%s/%s.v%d.html", dir, urlHash, prevVersionNum+1)
 
 	if prevVersionNum <= 0 {
 		writeFile(fileName, resp)
@@ -89,7 +129,7 @@ func main() {
 	} else if compareStringToFile(string(resp), oldFileName) == 0 {
 		writeFile(fileName, resp)
 		fmt.Println("New version")
-		// send alert
+		sendTextAlert(url, viper.GetString("twilio.accountId"), viper.GetString("twilio.authToken"), viper.GetString("twilio.phoneNumber"), viper.GetString("phoneNumber"))
 	} else {
 		fmt.Println("No change")
 	}
