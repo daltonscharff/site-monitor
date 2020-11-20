@@ -1,2 +1,2 @@
 # site-monitor
-Sends a text message when a website changes
+Sends an alert via text message and/or email when a site's content changes.
