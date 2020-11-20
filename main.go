@@ -8,24 +8,24 @@ Usage: site-monitor.exe --url http://www.google.com --phone +01234567890 --email
 */
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
-	"hash/fnv"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
-	"strconv"
-	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/daltonscharff/site-monitor/structs"
 )
 
-func getHtml(url string) string {
+func getHTML(url string) string {
 	resp, err := http.Get(url)
 	if err != nil {
-		panic(err)
+		fmt.Println("Cannot reach url")
+		os.Exit(3)
 	}
 	defer resp.Body.Close()
 
@@ -37,13 +37,13 @@ func getHtml(url string) string {
 	return string(body)
 }
 
-func sendTextAlert(siteUrl string, twilioAccountId string, twilioAuthToken string, fromNumber string, toNumber string) *http.Response {
-	twilioUrl := fmt.Sprintf("https://%s:%s@api.twilio.com/2010-04-01/Accounts/%s/Messages.json", twilioAccountId, twilioAuthToken, twilioAccountId)
+func sendText(message string, twilioAccountID string, twilioAuthToken string, fromNumber string, toNumber string) *http.Response {
+	twilioURL := fmt.Sprintf("https://%s:%s@api.twilio.com/2010-04-01/Accounts/%s/Messages.json", twilioAccountID, twilioAuthToken, twilioAccountID)
 
-	resp, err := http.PostForm(twilioUrl, url.Values{
+	resp, err := http.PostForm(twilioURL, url.Values{
 		"From": {fromNumber},
 		"To":   {toNumber},
-		"Body": {"WEBSITE UPDATE%0a" + siteUrl},
+		"Body": {message},
 	})
 	if err != nil {
 		panic(err)
@@ -52,14 +52,42 @@ func sendTextAlert(siteUrl string, twilioAccountId string, twilioAuthToken strin
 	return resp
 }
 
-func parseFlags(siteUrl *string, saveDir *string, phone *string, email *string) {
-	flag.StringVar(siteUrl, "url", "", "FQDN to watch for changes")
+func sendEmail(toEmail string, fromEmail string, subject string, message string, sendgridApiKey string) *http.Response {
+	sendgridURL := "https://api.sendgrid.com/v3/mail/send"
+
+	data := []byte(`{
+		"personalizations": 
+		[{"to": [{"email": "` + toEmail + `"}]}],
+		"from": {"email": "` + fromEmail + `"},
+		"subject": "` + subject + `",
+		"content": [{"type": "text/plain", "value": "` + message + `"}]}`)
+
+	req, err := http.NewRequest("POST", sendgridURL, bytes.NewBuffer(data))
+	if err != nil {
+		panic(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+sendgridApiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	fmt.Println(resp)
+	return resp
+}
+
+func parseFlags(siteURL *string, saveDir *string, phone *string, email *string) {
+	flag.StringVar(siteURL, "url", "", "FQDN to watch for changes")
 	flag.StringVar(saveDir, "dir", "./history", "folder to store site versions")
 	flag.StringVar(phone, "phone", "", "phone number for sending text updates (optional, requires twilio information config.yaml file)")
 	flag.StringVar(email, "email", "", "email address for sending email updates (optional)")
 	flag.Parse()
 
-	if len(*siteUrl) == 0 {
+	if len(*siteURL) == 0 {
 		fmt.Println("Please provide a URL to watch")
 		os.Exit(1)
 	}
@@ -79,127 +107,57 @@ func parseFlags(siteUrl *string, saveDir *string, phone *string, email *string) 
 	}
 }
 
-func readConfig() {
+func readConfig(phone string, email string) {
 	viper.SetConfigFile("./config.yaml")
 	if err := viper.ReadInConfig(); err != nil {
 		panic(err)
 	}
-}
 
-type FileVersion struct {
-	url     string
-	hash    string
-	version int
-	body    string
-}
-
-func (f *FileVersion) setHash() {
-	h := fnv.New32a()
-	h.Write([]byte((*f).url))
-	(*f).hash = strconv.FormatInt(int64(h.Sum32()), 10)
-}
-
-func (f *FileVersion) setMostRecentVersion(dir string) {
-	fileList, err := ioutil.ReadDir(dir)
-	if err != nil {
-		panic(err)
-	}
-
-	patternString := fmt.Sprintf(`%s\.v(?P<version>\d+).html`, (*f).hash)
-	pattern := regexp.MustCompile(patternString)
-
-	v := 0
-	for _, file := range fileList {
-		match := pattern.FindStringSubmatch(file.Name())
-		if len(match) > 0 {
-			i, _ := strconv.Atoi(match[1])
-			if i > v {
-				v = i
-			}
+	if len(phone) > 0 {
+		if !viper.IsSet("twilio.accountId") || !viper.IsSet("twilio.authToken") || !viper.IsSet("twilio.phoneNumber") {
+			fmt.Println("Texting a phone requires the following in config.yaml:\ntwilio.accountId\ntwilio.authToken\ntwilio.phoneNumber")
+			os.Exit(4)
 		}
 	}
-
-	(*f).version = v
-}
-
-func (f *FileVersion) getFileName() string {
-	return fmt.Sprintf("%s.v%d.html", f.hash, f.version)
-}
-
-func (a FileVersion) compare(b FileVersion) int {
-	return strings.Compare(a.body, b.body)
-}
-
-func (f *FileVersion) readBody(dir string) {
-	filePath := fmt.Sprintf("%s/%s", dir, f.getFileName())
-	content, err := ioutil.ReadFile(filePath)
-
-	if os.IsNotExist(err) {
-		(*f).body = ""
-		return
-	} else if err != nil {
-		panic(err)
-	}
-
-	(*f).body = string(content)
-}
-
-func (f *FileVersion) writeBody(dir string) {
-	filePath := fmt.Sprintf("%s/%s", dir, f.getFileName())
-	err := ioutil.WriteFile(filePath, []byte(f.body), 0644)
-	if err != nil {
-		panic(err)
+	if len(email) > 0 {
+		if !viper.IsSet("sendgrid.apiKey") || !viper.IsSet("sendgrid.fromEmail") {
+			fmt.Println("Sending an email requires the following in config.yaml:\nsendgrid.apiKey\nsendgrid.fromEmail")
+			os.Exit(4)
+		}
 	}
 }
 
 func main() {
-	var siteUrl, saveDir, phone, email string
+	var siteURL, saveDir, phone, email string
 
-	parseFlags(&siteUrl, &saveDir, &phone, &email)
+	parseFlags(&siteURL, &saveDir, &phone, &email)
+	readConfig(phone, email)
 
-	var previousVersion FileVersion
-	previousVersion.url = siteUrl
-	previousVersion.setHash()
-	previousVersion.setMostRecentVersion(saveDir)
-	previousVersion.readBody(saveDir)
+	var previousVersion structs.FileVersion
+	previousVersion.URL = siteURL
+	previousVersion.SetHash()
+	previousVersion.SetMostRecentVersion(saveDir)
+	previousVersion.ReadBody(saveDir)
 
 	currentVersion := previousVersion
-	currentVersion.version++
-	currentVersion.body = getHtml(siteUrl)
+	currentVersion.Version++
+	currentVersion.Body = getHTML(siteURL)
 
-	if currentVersion.version == 1 {
+	if currentVersion.Version == 1 {
 		fmt.Println("No previous versions")
-		currentVersion.writeBody(saveDir)
-	} else if currentVersion.compare(previousVersion) != 0 {
+		currentVersion.WriteBody(saveDir)
+	} else if currentVersion.Compare(previousVersion) != 0 {
 		fmt.Println("Change")
-		currentVersion.writeBody(saveDir)
+		currentVersion.WriteBody(saveDir)
 
 		if len(phone) > 0 {
-			readConfig()
+			message := "WEBSITE UPDATE\n" + siteURL
+			sendText(message, viper.GetString("twilio.accountId"), viper.GetString("twilio.authToken"), viper.GetString("twilio.phoneNumber"), phone)
 		}
-
 		if len(email) > 0 {
-
+			sendEmail(email, viper.GetString("sendgrid.fromEmail"), "WEBSITE UPDATE", siteURL, viper.GetString("sendgrid.apiKey"))
 		}
 	} else {
 		fmt.Println("No change")
 	}
-
-	// resp := getHttpResponse(url)
-
-	// prevVersionNum := previousVersion(urlHash, dir)
-
-	// oldFileName := fmt.Sprintf("%s/%s.v%d.html", dir, urlHash, prevVersionNum)
-	// fileName := fmt.Sprintf("%s/%s.v%d.html", dir, urlHash, prevVersionNum+1)
-
-	// if prevVersionNum <= 0 {
-	// 	writeFile(fileName, resp)
-	// 	fmt.Println("New file")
-	// } else if compareStringToFile(string(resp), oldFileName) == 0 {
-	// 	writeFile(fileName, resp)
-	// 	fmt.Println("New version")
-	// 	sendTextAlert(url, viper.GetString("twilio.accountId"), viper.GetString("twilio.authToken"), viper.GetString("twilio.phoneNumber"), viper.GetString("phoneNumber"))
-	// } else {
-	// 	fmt.Println("No change")
-	// }
 }
