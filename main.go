@@ -21,7 +21,7 @@ import (
 	"github.com/daltonscharff/site-monitor/structs"
 )
 
-func getHTML(url string) string {
+func get(url string) string {
 	resp, err := http.Get(url)
 	if err != nil {
 		fmt.Println("Cannot reach url")
@@ -141,7 +141,7 @@ func main() {
 
 	currentVersion := previousVersion
 	currentVersion.Version++
-	currentVersion.Body = getHTML(siteURL)
+	currentVersion.Body = get(siteURL)
 
 	if currentVersion.Version == 1 {
 		fmt.Println("No previous versions")
