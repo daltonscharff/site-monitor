@@ -64,11 +64,9 @@ func (f *FileVersion) ReadBody(dir string) {
 	filePath := fmt.Sprintf("%s/%s", dir, f.GetFileName())
 
 	_, err := os.Stat(filePath)
-	if os.IsNotExist(err) {
+	if err != nil {
 		(*f).Body = ""
 		return
-	} else if err != nil {
-		panic(err)
 	}
 
 	content, _ := ioutil.ReadFile(filePath)
