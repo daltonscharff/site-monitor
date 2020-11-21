@@ -62,8 +62,8 @@ func (f FileVersion) Compare(b FileVersion) int {
 // ReadBody reads the body from a file to a version if it exists
 func (f *FileVersion) ReadBody(dir string) {
 	filePath := fmt.Sprintf("%s/%s", dir, f.GetFileName())
-	content, err := ioutil.ReadFile(filePath)
 
+	_, err := os.Stat(filePath)
 	if os.IsNotExist(err) {
 		(*f).Body = ""
 		return
@@ -71,6 +71,7 @@ func (f *FileVersion) ReadBody(dir string) {
 		panic(err)
 	}
 
+	content, _ := ioutil.ReadFile(filePath)
 	(*f).Body = string(content)
 }
 
