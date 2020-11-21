@@ -11,17 +11,19 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
+	"golang.org/x/net/html"
 
 	"github.com/daltonscharff/site-monitor/structs"
 )
 
-func get(url string) string {
+func getText(url string) string {
 	resp, err := http.Get(url)
 	if err != nil {
 		fmt.Println("Cannot reach url")
@@ -29,12 +31,46 @@ func get(url string) string {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
+	body := ""
+	textTags := []string{
+		"a",
+		"p", "span", "em", "string", "blockquote", "q", "cite",
+		"h1", "h2", "h3", "h4", "h5", "h6",
+	}
+	tokenizer := html.NewTokenizer(resp.Body)
+	var isTextTag bool
+
+	for {
+		tt := tokenizer.Next()
+		token := tokenizer.Token()
+
+		err := tokenizer.Err()
+		if err == io.EOF {
+			break
+		}
+
+		switch tt {
+		case html.ErrorToken:
+			panic(err)
+		case html.StartTagToken, html.SelfClosingTagToken:
+			isTextTag = false
+			for _, ttt := range textTags {
+				if token.Data == ttt {
+					isTextTag = true
+					break
+				}
+			}
+		case html.TextToken:
+			if isTextTag {
+				data := strings.TrimSpace(token.Data)
+				if len(data) > 0 {
+					body += data + "\n"
+				}
+			}
+		}
 	}
 
-	return string(body)
+	return body
 }
 
 func sendText(message string, twilioAccountID string, twilioAuthToken string, fromNumber string, toNumber string) *http.Response {
@@ -141,7 +177,7 @@ func main() {
 
 	currentVersion := previousVersion
 	currentVersion.Version++
-	currentVersion.Body = get(siteURL)
+	currentVersion.Body = getText(siteURL)
 
 	if currentVersion.Version == 1 {
 		fmt.Println("No previous versions")
