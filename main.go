@@ -101,7 +101,7 @@ func parseFlags(siteURL *string, saveDir *string, phone *string, email *string) 
 		*phone = fmt.Sprintf("+1%s", *phone)
 	}
 
-	err := os.MkdirAll(*saveDir, 0644)
+	err := os.MkdirAll(*saveDir, 0775)
 	if err != nil {
 		fmt.Println("Could not create save directory", err)
 	}
